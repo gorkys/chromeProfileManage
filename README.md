@@ -1,141 +1,153 @@
-# Chrome Profile Manage
+<div align="center">
+  <img src="src/renderer/assets/logo.png" width="96" height="96" alt="Chrome Profile Manage logo">
 
-Windows 本地 Chrome Profile 环境工作台，用于创建、同步、启动多个相互隔离的 Chrome 工作环境。它不是简单的浏览器多开工具，而是面向多账号、多店铺、多项目的本地工作环境生成器。
+  <h1>Chrome Profile Manage</h1>
 
-## 特性
+  <p>
+    A lightweight Windows desktop workspace manager for isolated Chrome profiles.
+  </p>
 
-- 基于 Chrome `--user-data-dir` 创建独立浏览器空间
-- 支持从母版 Profile 同步配置、插件和浏览器状态
-- 支持创建时同步母版，也支持对已有环境再次同步母版
-- 支持为每个环境配置启动网页
-- 支持修改新环境的 Profile 保存路径
-- 环境名称和启动网页双击编辑并自动保存
-- 删除环境时同步删除本工具创建的 Profile 文件夹，并进行二次确认
-- 提供深色和浅色主题
-- 使用 Tauri v2 构建，体积轻，不捆绑 Chromium
+  <p>
+    <a href="https://github.com/gorkys/chromeProfileManage/releases">
+      <img alt="Release" src="https://img.shields.io/github/v/release/gorkys/chromeProfileManage?style=flat-square">
+    </a>
+    <a href="LICENSE">
+      <img alt="License" src="https://img.shields.io/github/license/gorkys/chromeProfileManage?style=flat-square">
+    </a>
+    <img alt="Platform" src="https://img.shields.io/badge/platform-Windows-blue?style=flat-square">
+    <img alt="Tauri" src="https://img.shields.io/badge/Tauri-v2-24c8db?style=flat-square">
+  </p>
+</div>
 
-## 界面
+## Overview
 
-左侧为固定图标栏，包含：
+Chrome Profile Manage is a local desktop application for creating and managing isolated Chrome workspaces. Each environment owns an independent Chrome `User Data` directory, allowing separate cookies, sessions, extension state, cache, and browser preferences.
 
-- 环境管理
-- 全局设置
-- 深浅主题切换
+The application is built with Tauri v2 and uses the system WebView instead of bundling Chromium, keeping the desktop shell small while delegating browser isolation to Chrome's native startup flags.
 
-环境列表使用表格展示，操作列包含：
+## Features
 
-- 启动环境
-- 同步母版
-- 打开 Profile 文件夹
-- 删除环境
+- Create isolated Chrome environments backed by independent `--user-data-dir` directories
+- Synchronize a template Chrome Profile into new or existing environments
+- Launch environments with a dedicated startup URL
+- Configure the storage directory used for newly created profiles
+- Edit environment name and startup URL inline with autosave
+- Open an environment's profile directory from the table
+- Delete managed environments with a confirmation step and path safety checks
+- Switch between light and dark themes
+- Use a compact icon-first interface for routine workspace operations
 
-## 母版 Profile
+## How It Works
 
-母版 Profile 是用来复制浏览器工作状态的来源目录。Windows 上 Chrome 默认 Profile 通常位于：
-
-```text
-C:\Users\<用户名>\AppData\Local\Google\Chrome\User Data
-```
-
-常见具体 Profile 目录：
-
-```text
-Default
-Profile 1
-Profile 2
-Profile 3
-```
-
-建议在全局设置中选择具体 Profile 目录，例如：
+Chrome Profile Manage stores each environment as a standalone Chrome `User Data` directory. When an environment is launched, Chrome receives:
 
 ```text
-C:\Users\king\AppData\Local\Google\Chrome\User Data\Profile 3
-```
-
-同步母版时，程序会把母版 Profile 内容复制到目标环境的 `Default` Profile 中，并在启动 Chrome 时使用：
-
-```text
---user-data-dir=<环境 User Data 目录>
+--user-data-dir=<environment-user-data-dir>
 --profile-directory=Default
 ```
 
-## 关于油猴脚本同步
+Template synchronization copies the selected source Profile into the environment's `Default` Profile directory. This preserves Chrome's expected directory layout while allowing users to choose source profiles such as `Default`, `Profile 1`, or `Profile 3`.
 
-Tampermonkey 等扩展的脚本数据通常存放在 Profile 内的扩展数据目录中，例如：
+## Screens and Actions
 
-- `Extensions`
-- `Local Extension Settings`
-- `IndexedDB`
+The main environment table provides these actions:
 
-因此母版 Profile 同步通常可以带上油猴插件和脚本数据。为提高成功率，请在同步前关闭母版 Chrome 窗口，避免运行中的 Chrome 占用或延迟写入 Profile 数据。
+| Action | Description |
+| --- | --- |
+| Launch | Start Chrome using the selected isolated environment |
+| Sync Template | Copy the configured template Profile into the environment |
+| Open Profile | Open the environment's profile directory in Explorer |
+| Delete | Delete the managed environment and its profile directory |
 
-## 技术栈
+Global settings include:
 
-- Tauri v2
-- Rust
-- 原生 HTML / CSS / JavaScript
-- Chrome `--user-data-dir`
+- Chrome executable path
+- Template Profile path
+- Profile storage path for new environments
+- Default startup URL
 
-## 开发环境
+## Installation
 
-需要安装：
+Download the latest release from:
 
+```text
+https://github.com/gorkys/chromeProfileManage/releases
+```
+
+Release assets:
+
+- `ChromeProfileManage.exe` - portable executable
+- `ChromeProfileManage-setup.exe` - Windows installer
+
+## Development
+
+### Prerequisites
+
+- Windows
 - Node.js
 - Rust
-- Windows WebView2 Runtime
+- Microsoft Edge WebView2 Runtime
 
-安装依赖：
+### Install Dependencies
 
 ```powershell
 npm install
 ```
 
-启动开发模式：
+### Run In Development
 
 ```powershell
 npm run dev
 ```
 
-## 打包
+### Build
 
 ```powershell
 npm run build
 ```
 
-常见产物：
+Build outputs are created under:
 
 ```text
-src-tauri\target\release\chrome-manage.exe
-src-tauri\target\release\bundle\nsis\Chrome 环境工作台_0.1.0_x64-setup.exe
+src-tauri\target\release\
+src-tauri\target\release\bundle\nsis\
 ```
 
-## 项目结构
+## Project Structure
 
 ```text
-src/
-  renderer/
-    index.html
-    renderer.js
-    styles.css
-    assets/
-src-tauri/
-  src/main.rs
-  icons/
-  tauri.conf.json
+.
+├─ src/
+│  └─ renderer/
+│     ├─ assets/
+│     ├─ index.html
+│     ├─ renderer.js
+│     └─ styles.css
+├─ src-tauri/
+│  ├─ icons/
+│  ├─ src/
+│  │  └─ main.rs
+│  ├─ Cargo.toml
+│  └─ tauri.conf.json
+├─ package.json
+└─ README.md
 ```
 
-## 数据存储
+## Data And Safety
 
-应用配置和默认 Profile 环境保存在 Tauri 应用数据目录下。也可以在全局设置中修改新建环境的 Profile 保存路径。
+- Application configuration is stored in the Tauri application data directory
+- New profiles are created under the configured profile storage path
+- Existing environments keep their original profile path when the global storage path changes
+- Deletion is restricted to managed profile roots to reduce accidental data loss
+- Running Chrome instances can lock profile files; close the target environment before synchronizing or deleting it
 
-已有环境会继续使用创建时记录的 Profile 路径，不会因为全局保存路径变化而自动迁移。
+## Technology
 
-## 安全说明
-
-- 删除环境只允许删除本工具管理目录下的 Profile，避免误删系统 Chrome Profile
-- 删除前会二次确认
-- 如果目标环境 Chrome 正在运行，删除可能失败，请先关闭对应 Chrome 窗口
+- [Tauri v2](https://tauri.app/)
+- Rust
+- HTML, CSS, and vanilla JavaScript
+- Chrome `--user-data-dir` and `--profile-directory`
 
 ## License
 
-MIT
+Distributed under the MIT License. See [LICENSE](LICENSE) for details.
