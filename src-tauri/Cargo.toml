@@ -1,0 +1,19 @@
+[package]
+name = "chrome-manage"
+version = "0.1.0"
+description = "本地化 Chrome 浏览器环境工作台"
+authors = ["chrome-manage"]
+license = ""
+repository = ""
+edition = "2021"
+rust-version = "1.77.2"
+
+[build-dependencies]
+tauri-build = { version = "2.5", features = [] }
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+rfd = "0.15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2.9", features = [] }
