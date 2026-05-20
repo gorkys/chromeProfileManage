@@ -16,6 +16,9 @@
   --danger: #c2410c;
   --success: #0f766e;
   --shadow: 0 10px 24px rgba(22, 31, 46, 0.08);
+  --scrollbar-track: transparent;
+  --scrollbar-thumb: rgba(102, 112, 133, 0.26);
+  --scrollbar-thumb-hover: rgba(102, 112, 133, 0.42);
 }
 
 [data-theme="dark"] {
@@ -36,10 +39,40 @@
   --danger: #fb923c;
   --success: #2dd4bf;
   --shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
+  --scrollbar-track: transparent;
+  --scrollbar-thumb: rgba(154, 167, 183, 0.22);
+  --scrollbar-thumb-hover: rgba(154, 167, 183, 0.34);
 }
 
 * {
   box-sizing: border-box;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+  scrollbar-width: thin;
+}
+
+*::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--scrollbar-thumb);
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 body {
@@ -62,6 +95,11 @@ input {
 
 button {
   cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
 }
 
 .app-shell {
@@ -182,6 +220,13 @@ button {
   display: block;
 }
 
+#view-about.active {
+  display: grid;
+  min-height: calc(100vh - 56px);
+  align-content: center;
+  justify-items: center;
+}
+
 .page-header {
   display: flex;
   align-items: center;
@@ -198,6 +243,11 @@ button {
   color: var(--muted);
 }
 
+#view-about .page-header {
+  justify-content: center;
+  text-align: center;
+}
+
 .panel {
   margin-bottom: 18px;
   padding: 18px;
@@ -209,13 +259,15 @@ button {
 
 .panel-title {
   display: flex;
-  align-items: baseline;
+  align-items: center;
+  justify-content: space-between;
   gap: 10px;
   margin-bottom: 16px;
 }
 
 .panel-title h3 {
   font-size: 17px;
+  margin: 0;
 }
 
 .panel-title span {
@@ -344,6 +396,13 @@ input[type="url"]:focus {
   font-weight: 700;
 }
 
+.environment-table .status-column,
+.environment-table .status-cell {
+  width: 1%;
+  text-align: center;
+  white-space: nowrap;
+}
+
 [data-theme="dark"] .environment-table th {
   color: var(--muted);
 }
@@ -382,6 +441,18 @@ input[type="url"]:focus {
 .editable-text:hover {
   border-color: var(--line);
   background: var(--surface-strong);
+}
+
+.profile-mode {
+  display: inline-grid;
+  min-width: 42px;
+  height: 22px;
+  place-items: center;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--surface-strong);
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .operation-list {
@@ -423,6 +494,34 @@ input[type="url"]:focus {
   stroke-linecap: round;
   stroke-linejoin: round;
   fill: none;
+}
+
+#scanProfilesBtn {
+  width: 38px;
+  height: 38px;
+  color: var(--accent);
+}
+
+#scanProfilesBtn svg {
+  width: 20px;
+  height: 20px;
+}
+
+.scan-icon .scan-line {
+  animation: scanLine 1.5s ease-in-out infinite;
+}
+
+@keyframes scanLine {
+  0%,
+  100% {
+    transform: translateY(-3px);
+    opacity: 0.45;
+  }
+
+  50% {
+    transform: translateY(3px);
+    opacity: 1;
+  }
 }
 
 .settings-panel {
@@ -517,8 +616,11 @@ input[type="url"]:focus {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   gap: 18px;
-  align-items: start;
+  align-items: center;
+  justify-content: center;
   max-width: 820px;
+  margin: 0 auto;
+  text-align: center;
 }
 
 .about-logo {
@@ -531,6 +633,7 @@ input[type="url"]:focus {
 .about-content {
   display: grid;
   gap: 14px;
+  justify-items: center;
 }
 
 .about-content h3 {
@@ -551,6 +654,8 @@ input[type="url"]:focus {
   display: grid;
   grid-template-columns: 88px minmax(0, 1fr);
   gap: 12px;
+  align-items: center;
+  text-align: left;
 }
 
 .about-content dt {
@@ -569,12 +674,28 @@ input[type="url"]:focus {
   background: transparent;
   color: var(--accent);
   font: inherit;
-  text-align: left;
+  text-align: center;
 }
 
 .link-button:hover {
   color: var(--accent-strong);
   text-decoration: underline;
+}
+
+.inline-link {
+  display: inline;
+}
+
+.update-check {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+}
+
+.update-status {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .empty-state {

@@ -1,4 +1,7 @@
 const invoke = window.__TAURI__.core.invoke;
+const CURRENT_VERSION = 'v0.1.3';
+const RELEASE_API_URL = 'https://api.github.com/repos/gorkys/chromeProfileManage/releases/latest';
+const RELEASE_PAGE_URL = 'https://github.com/gorkys/chromeProfileManage/releases';
 
 const api = {
   loadConfig: () => invoke('load_config'),
@@ -6,6 +9,7 @@ const api = {
   selectChromeFile: () => invoke('select_chrome_file'),
   selectDirectory: (title, initialPath = '') => invoke('select_directory', { title, initialPath }),
   createEnvironment: (payload) => invoke('create_environment', { payload }),
+  scanExistingProfiles: () => invoke('scan_existing_profiles'),
   updateEnvironment: (id, patch) => invoke('update_environment', { id, patch }),
   deleteEnvironment: (id) => invoke('delete_environment', { id }),
   copyMaster: (id) => invoke('copy_master', { id }),
@@ -31,6 +35,7 @@ const nodes = {
   envName: document.getElementById('envName'),
   envUrl: document.getElementById('envUrl'),
   copyMaster: document.getElementById('copyMaster'),
+  scanProfilesBtn: document.getElementById('scanProfilesBtn'),
   chromePath: document.getElementById('chromePath'),
   masterProfilePath: document.getElementById('masterProfilePath'),
   profileStoragePath: document.getElementById('profileStoragePath'),
@@ -45,6 +50,8 @@ const nodes = {
   selectMasterBtn: document.getElementById('selectMasterBtn'),
   selectStorageBtn: document.getElementById('selectStorageBtn'),
   openRepositoryBtn: document.getElementById('openRepositoryBtn'),
+  checkUpdateBtn: document.getElementById('checkUpdateBtn'),
+  updateStatus: document.getElementById('updateStatus'),
   themeToggleBtn: document.getElementById('themeToggleBtn'),
   themeIcon: document.getElementById('themeIcon'),
   toast: document.getElementById('toast'),
@@ -110,6 +117,65 @@ function formatTime(value) {
 }
 
 /**
+ * 将版本号解析为数字序列
+ * @param {string} version 版本号文本
+ * @returns {number[]} 版本数字序列
+ */
+function parseVersion(version) {
+  return String(version || '')
+    .replace(/^v/i, '')
+    .split('.')
+    .map((part) => Number.parseInt(part, 10))
+    .map((part) => (Number.isFinite(part) ? part : 0));
+}
+
+/**
+ * 比较两个版本号的新旧
+ * @param {string} left 左侧版本号
+ * @param {string} right 右侧版本号
+ * @returns {number} 左侧更新返回 1，相同返回 0，左侧更旧返回 -1
+ */
+function compareVersions(left, right) {
+  const leftParts = parseVersion(left);
+  const rightParts = parseVersion(right);
+  const length = Math.max(leftParts.length, rightParts.length);
+
+  for (let index = 0; index < length; index += 1) {
+    const leftPart = leftParts[index] || 0;
+    const rightPart = rightParts[index] || 0;
+
+    if (leftPart > rightPart) {
+      return 1;
+    }
+
+    if (leftPart < rightPart) {
+      return -1;
+    }
+  }
+
+  return 0;
+}
+
+/**
+ * 从 GitHub Releases 获取最新版本标签
+ * @returns {Promise<string>} 最新 release 标签
+ */
+async function fetchLatestReleaseTag() {
+  const response = await fetch(RELEASE_API_URL, {
+    headers: {
+      Accept: 'application/vnd.github+json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`检查更新失败：GitHub 返回 ${response.status}`);
+  }
+
+  const release = await response.json();
+  return release.tag_name || '';
+}
+
+/**
  * 生成页面内联图标
  * @param {string} name 图标名称
  * @returns {string} SVG 图标 HTML
@@ -123,6 +189,25 @@ function icon(name) {
   };
 
   return icons[name] || '';
+}
+
+/**
+ * 判断环境是否为受保护的外部 Profile
+ * @param {object} environment 环境配置对象
+ * @returns {boolean} 是外部 Default、Guest Profile、System Profile 时返回 true
+ */
+function isProtectedExternalProfile(environment) {
+  return environment?.managed === false
+    && ['default', 'guest profile', 'system profile'].includes(String(environment.profileDirectory || '').toLowerCase());
+}
+
+/**
+ * 判断环境是否为可删除磁盘目录的外部 Profile
+ * @param {object} environment 环境配置对象
+ * @returns {boolean} 可删除外部 Profile 目录时返回 true
+ */
+function isDeletableExternalProfile(environment) {
+  return environment?.managed === false && !isProtectedExternalProfile(environment);
 }
 
 /**
@@ -263,6 +348,8 @@ function renderEnvironmentRow(environment) {
     ? `<input class="name-input" type="text" data-field="name" value="${escapeHtml(environment.name)}" />`
     : `<span class="editable-text" data-edit-field="name" title="双击编辑">${escapeHtml(environment.name)}</span>`;
   const startUrlText = environment.startUrl || '未设置';
+  const profileModeText = environment.managed === false ? '外部' : '内部';
+  const canSyncMaster = environment.managed !== false || !isProtectedExternalProfile(environment);
   const startUrlCell = state.editing.has(startUrlKey)
     ? `<input type="url" data-field="startUrl" value="${escapeHtml(environment.startUrl || '')}" placeholder="https://example.com" />`
     : `<span class="editable-text ${environment.startUrl ? '' : 'empty'}" data-edit-field="startUrl" title="双击编辑">${escapeHtml(startUrlText)}</span>`;
@@ -270,14 +357,15 @@ function renderEnvironmentRow(environment) {
   return `
     <tr data-id="${environment.id}">
       <td>${nameCell}</td>
+      <td class="status-cell"><span class="profile-mode">${profileModeText}</span></td>
       <td>${startUrlCell}</td>
       <td>${formatTime(environment.createdAt)}</td>
       <td>
         <div class="operation-list">
           <button class="icon-btn primary" data-action="launch" data-id="${environment.id}" title="启动" type="button">${icon('launch')}</button>
-          <button class="icon-btn" data-action="copy-master" data-id="${environment.id}" title="同步母版" type="button">${icon('sync')}</button>
+          ${canSyncMaster ? `<button class="icon-btn" data-action="copy-master" data-id="${environment.id}" title="${environment.managed === false ? '同步母版到外部 Profile' : '同步母版'}" type="button">${icon('sync')}</button>` : ''}
           <button class="icon-btn" data-action="open-profile" data-id="${environment.id}" title="${escapeHtml(environment.profilePath)}" type="button">${icon('folder')}</button>
-          <button class="icon-btn danger" data-action="delete" data-id="${environment.id}" title="删除环境和 profile 文件夹" type="button">${icon('delete')}</button>
+          <button class="icon-btn danger" data-action="delete" data-id="${environment.id}" title="${isDeletableExternalProfile(environment) ? '删除外部 Profile 文件夹' : environment.managed === false ? '移出管理列表，不删除受保护 Profile' : '删除环境和 profile 文件夹'}" type="button">${icon('delete')}</button>
         </div>
       </td>
     </tr>
@@ -407,6 +495,15 @@ nodes.createForm.addEventListener('submit', (event) => {
   });
 });
 
+nodes.scanProfilesBtn.addEventListener('click', () => {
+  runTask(async () => {
+    const scannedEnvironments = await api.scanExistingProfiles();
+
+    await loadAndRender();
+    showToast(scannedEnvironments.length > 0 ? `已扫描到 ${scannedEnvironments.length} 个已有 Profile` : '没有发现新的已有 Profile');
+  });
+});
+
 nodes.selectChromeBtn.addEventListener('click', () => {
   runTask(async () => {
     const selected = await api.selectChromeFile();
@@ -482,6 +579,42 @@ nodes.openRepositoryBtn.addEventListener('click', () => {
   });
 });
 
+nodes.checkUpdateBtn.addEventListener('click', () => {
+  runTask(async () => {
+    nodes.checkUpdateBtn.disabled = true;
+    nodes.updateStatus.textContent = '正在检查更新...';
+
+    try {
+      const latestTag = await fetchLatestReleaseTag();
+
+      if (!latestTag) {
+        throw new Error('检查更新失败：未获取到最新版本标签');
+      }
+
+      if (compareVersions(latestTag, CURRENT_VERSION) > 0) {
+        nodes.updateStatus.innerHTML = `发现新版本 ${escapeHtml(latestTag)}，<button class="link-button inline-link" id="openReleasePageBtn" type="button">打开发布页</button>`;
+        return;
+      }
+
+      nodes.updateStatus.textContent = `已是最新版本 ${CURRENT_VERSION}`;
+    } finally {
+      nodes.checkUpdateBtn.disabled = false;
+    }
+  });
+});
+
+nodes.updateStatus.addEventListener('click', (event) => {
+  const button = event.target.closest('#openReleasePageBtn');
+
+  if (!button) {
+    return;
+  }
+
+  runTask(async () => {
+    await api.openPath(RELEASE_PAGE_URL);
+  });
+});
+
 nodes.environmentList.addEventListener('click', (event) => {
   const button = event.target.closest('button[data-action]');
 
@@ -500,6 +633,14 @@ nodes.environmentList.addEventListener('click', (event) => {
     }
 
     if (action === 'copy-master') {
+      if (environment.managed === false) {
+        const confirmed = window.confirm(`将把母版 Profile 同步到外部环境「${environment.name}」：\n${environment.profilePath}\n\n该操作会覆盖同名文件，可能影响原 Chrome Profile 数据，确认继续？`);
+
+        if (!confirmed) {
+          return;
+        }
+      }
+
       await api.copyMaster(id);
       showToast('母版 Profile 已同步');
       return;
@@ -511,7 +652,11 @@ nodes.environmentList.addEventListener('click', (event) => {
     }
 
     if (action === 'delete') {
-      const confirmed = window.confirm(`将删除环境「${environment.name}」及其 profile 文件夹：\n${environment.profilePath}\n\n该操作不可恢复，确认删除？`);
+      const confirmed = isDeletableExternalProfile(environment)
+        ? window.confirm(`将删除外部 Profile「${environment.name}」及其文件夹：\n${environment.profilePath}\n\n该操作不可恢复，确认删除？`)
+        : environment.managed === false
+          ? window.confirm(`将环境「${environment.name}」移出管理列表：\n${environment.profilePath}\n\n该 Profile 不属于可删除 Profile，原文件夹不会删除，确认移出？`)
+          : window.confirm(`将删除环境「${environment.name}」及其 profile 文件夹：\n${environment.profilePath}\n\n该操作不可恢复，确认删除？`);
 
       if (!confirmed) {
         return;
@@ -519,7 +664,7 @@ nodes.environmentList.addEventListener('click', (event) => {
 
       await api.deleteEnvironment(id);
       await loadAndRender();
-      showToast('环境和 profile 文件夹已删除');
+      showToast(environment.managed === false && isProtectedExternalProfile(environment) ? '环境已移出管理列表' : '环境和 profile 文件夹已删除');
     }
   });
 });

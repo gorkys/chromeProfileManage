@@ -17,6 +17,10 @@ struct Environment {
     id: String,
     name: String,
     profile_path: String,
+    #[serde(default = "default_profile_directory")]
+    profile_directory: String,
+    #[serde(default = "default_true")]
+    managed: bool,
     start_url: String,
     #[serde(default)]
     extension_paths: Vec<String>,
@@ -151,6 +155,18 @@ struct EnvironmentPatch {
     start_url: Option<String>,
 }
 
+/// 返回默认 Chrome profile 名称
+/// 返回值：Default
+fn default_profile_directory() -> String {
+    "Default".to_string()
+}
+
+/// 返回默认开启状态
+/// 返回值：true
+fn default_true() -> bool {
+    true
+}
+
 /// 返回应用数据根目录，用于保存配置和 profile
 /// app：Tauri 应用句柄
 /// 返回值：可写入的本地数据目录
@@ -268,20 +284,31 @@ fn find_chrome_path() -> String {
 /// 探测当前用户默认 Chrome profile 目录
 /// 返回值：优先返回 Default profile，找不到时返回 User Data，仍找不到时返回空字符串
 fn find_default_profile_path() -> String {
+    default_chrome_user_data_dir()
+        .and_then(|user_data_path| {
+            let default_profile_path = user_data_path.join("Default");
+
+            if default_profile_path.is_dir() {
+                return Some(default_profile_path.to_string_lossy().to_string());
+            }
+
+            if user_data_path.is_dir() {
+                return Some(user_data_path.to_string_lossy().to_string());
+            }
+
+            None
+        })
+        .unwrap_or_default()
+}
+
+/// 探测当前用户默认 Chrome User Data 目录
+/// 返回值：默认 Chrome User Data 目录，找不到时返回 None
+fn default_chrome_user_data_dir() -> Option<PathBuf> {
     if let Ok(local_app_data) = env::var("LOCALAPPDATA") {
-        let user_data_path = Path::new(&local_app_data).join("Google\\Chrome\\User Data");
-        let default_profile_path = user_data_path.join("Default");
-
-        if default_profile_path.is_dir() {
-            return default_profile_path.to_string_lossy().to_string();
-        }
-
-        if user_data_path.is_dir() {
-            return user_data_path.to_string_lossy().to_string();
-        }
+        return Some(Path::new(&local_app_data).join("Google\\Chrome\\User Data"));
     }
 
-    String::new()
+    None
 }
 
 /// 生成默认配置
@@ -622,7 +649,76 @@ fn resolve_master_profile_source(master_profile_path: &Path) -> Result<PathBuf, 
 /// environment：环境配置对象
 /// 返回值：环境 User Data 下的 Default profile 目录
 fn environment_default_profile_dir(environment: &Environment) -> PathBuf {
-    Path::new(&environment.profile_path).join("Default")
+    if environment.managed {
+        return Path::new(&environment.profile_path).join(&environment.profile_directory);
+    }
+
+    PathBuf::from(&environment.profile_path)
+}
+
+/// 获取 Chrome 启动所需的 user-data-dir
+/// environment：环境配置对象
+/// 返回值：传给 Chrome 的 user-data-dir 路径
+fn environment_user_data_dir(environment: &Environment) -> PathBuf {
+    if environment.managed {
+        return PathBuf::from(&environment.profile_path);
+    }
+
+    Path::new(&environment.profile_path)
+        .parent()
+        .map(|path| path.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from(&environment.profile_path))
+}
+
+/// 获取 Chrome 启动所需的 profile-directory
+/// environment：环境配置对象
+/// 返回值：传给 Chrome 的 profile-directory 名称
+fn environment_profile_directory(environment: &Environment) -> String {
+    if environment.profile_directory.trim().is_empty() {
+        return default_profile_directory();
+    }
+
+    environment.profile_directory.clone()
+}
+
+/// 判断是否为可扫描的常规 Chrome profile 名称
+/// profile_directory：profile 目录名
+/// 返回值：常规 profile 返回 true，Guest/System 等内部 profile 返回 false
+fn is_regular_profile_directory(profile_directory: &str) -> bool {
+    let normalized = profile_directory.trim().to_ascii_lowercase();
+
+    normalized.starts_with("profile ")
+}
+
+/// 判断是否为不能删除磁盘目录的外部 profile
+/// profile_directory：profile 目录名
+/// 返回值：Default、Guest Profile、System Profile 返回 true
+fn is_protected_external_profile_directory(profile_directory: &str) -> bool {
+    matches!(
+        profile_directory.trim().to_ascii_lowercase().as_str(),
+        "default" | "guest profile" | "system profile"
+    )
+}
+
+/// 解析扫描到的外部 Chrome profile 目录
+/// profile_path：扫描到的 profile 目录
+/// 返回值：规范化后的 profile 路径和 profile-directory 名称
+fn resolve_external_profile(profile_path: &Path) -> Result<(PathBuf, String), String> {
+    if !profile_path.is_dir() {
+        return Err("外部 Profile 路径不存在".to_string());
+    }
+
+    if !is_chrome_profile_dir(profile_path) {
+        return Err("扫描到的目录不是有效 Chrome Profile".to_string());
+    }
+
+    let profile_directory = profile_path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .filter(|name| !name.trim().is_empty())
+        .ok_or_else(|| "无法识别外部 Profile 的目录名".to_string())?;
+
+    Ok((profile_path.to_path_buf(), profile_directory))
 }
 
 /// 确认待删除 profile 位于应用管理目录内
@@ -669,6 +765,46 @@ fn ensure_managed_profile_path(app: &tauri::AppHandle, target_path: &Path) -> Re
     }
 
     Err("出于安全限制，只允许删除本工具创建的 profile 目录".to_string())
+}
+
+/// 确认外部 profile 可被删除
+/// target_path：待删除的外部 profile 目录
+/// profile_directory：profile-directory 名称
+/// 返回值：通过校验时无返回值
+fn ensure_deletable_external_profile_path(
+    target_path: &Path,
+    profile_directory: &str,
+) -> Result<(), String> {
+    if is_protected_external_profile_directory(profile_directory) {
+        return Err("Default、Guest Profile、System Profile 只能移出管理列表".to_string());
+    }
+
+    if !target_path.exists() {
+        return Ok(());
+    }
+
+    let user_data_path = default_chrome_user_data_dir()
+        .ok_or_else(|| "未找到默认 Chrome User Data 目录，无法确认外部 Profile 删除范围".to_string())?;
+    let canonical_root = user_data_path.canonicalize().map_err(|error| {
+        format!(
+            "读取默认 Chrome User Data 目录失败：{}，路径：{}",
+            error,
+            user_data_path.display()
+        )
+    })?;
+    let canonical_target = target_path.canonicalize().map_err(|error| {
+        format!(
+            "读取待删除外部 Profile 目录失败：{}，路径：{}",
+            error,
+            target_path.display()
+        )
+    })?;
+
+    if !canonical_target.starts_with(&canonical_root) {
+        return Err("出于安全限制，只允许删除默认 Chrome User Data 目录下的外部 Profile".to_string());
+    }
+
+    Ok(())
 }
 
 /// 递归复制目录，按同步选项跳过敏感浏览数据
@@ -868,6 +1004,8 @@ fn create_environment(
         id: format!("{}_{}", current_millis(), config.environments.len() + 1),
         name,
         profile_path: profile_path.to_string_lossy().to_string(),
+        profile_directory: default_profile_directory(),
+        managed: true,
         start_url: payload
             .start_url
             .unwrap_or_else(|| config.default_url.clone())
@@ -889,6 +1027,90 @@ fn create_environment(
     write_config(&app, &config)?;
 
     Ok(environment)
+}
+
+/// 扫描默认 Chrome User Data 下的已有 Profile
+/// app：Tauri 应用句柄
+/// 返回值：新增到管理列表的环境对象
+#[tauri::command]
+fn scan_existing_profiles(app: tauri::AppHandle) -> Result<Vec<Environment>, String> {
+    let mut config = read_config(&app)?;
+    let user_data_path = default_chrome_user_data_dir()
+        .ok_or_else(|| "未找到默认 Chrome User Data 目录".to_string())?;
+
+    if !user_data_path.is_dir() {
+        return Err(format!(
+            "默认 Chrome User Data 目录不存在：{}",
+            user_data_path.display()
+        ));
+    }
+
+    let mut external_environments = Vec::new();
+
+    for entry_result in fs::read_dir(&user_data_path)
+        .map_err(|error| format!("读取 Chrome User Data 目录失败：{}，路径：{}", error, user_data_path.display()))?
+    {
+        let entry = entry_result
+            .map_err(|error| format!("读取 Chrome User Data 目录项失败：{}，路径：{}", error, user_data_path.display()))?;
+        let profile_path = entry.path();
+
+        if !profile_path.is_dir() || !is_chrome_profile_dir(&profile_path) {
+            continue;
+        }
+
+        let (profile_path, profile_directory) = resolve_external_profile(&profile_path)?;
+
+        if !is_regular_profile_directory(&profile_directory) {
+            continue;
+        }
+
+        let canonical_profile_path = profile_path.canonicalize().map_err(|error| {
+            format!(
+                "读取已有 Profile 路径失败：{}，路径：{}",
+                error,
+                profile_path.display()
+            )
+        })?;
+        let already_exists = config.environments.iter().any(|environment| {
+            Path::new(&environment.profile_path)
+                .canonicalize()
+                .map(|path| path == canonical_profile_path)
+                .unwrap_or(false)
+        });
+
+        if already_exists {
+            continue;
+        }
+
+        let now = current_timestamp();
+        let environment = Environment {
+            id: format!(
+                "{}_{}",
+                current_millis(),
+                config.environments.len() + external_environments.len() + 1
+            ),
+            name: profile_directory.clone(),
+            profile_path: profile_path.to_string_lossy().to_string(),
+            profile_directory,
+            managed: false,
+            start_url: config.default_url.trim().to_string(),
+            extension_paths: Vec::new(),
+            created_at: now.clone(),
+            updated_at: now,
+        };
+
+        external_environments.push(environment);
+    }
+
+    if !external_environments.is_empty() {
+        for environment in external_environments.iter().rev() {
+            config.environments.insert(0, environment.clone());
+        }
+
+        write_config(&app, &config)?;
+    }
+
+    Ok(external_environments)
 }
 
 /// 更新指定环境
@@ -935,18 +1157,33 @@ fn update_environment(
 fn delete_environment(app: tauri::AppHandle, id: String) -> Result<bool, String> {
     let mut config = read_config(&app)?;
     let index = find_environment_index(&config, &id)?;
-    let profile_path = PathBuf::from(&config.environments[index].profile_path);
+    let environment = config.environments[index].clone();
+    let profile_path = PathBuf::from(&environment.profile_path);
 
-    ensure_managed_profile_path(&app, &profile_path)?;
+    if environment.managed {
+        ensure_managed_profile_path(&app, &profile_path)?;
 
-    if profile_path.exists() {
-        fs::remove_dir_all(&profile_path).map_err(|error| {
-            format!(
-                "删除 profile 目录失败：{}，路径：{}",
-                error,
-                profile_path.display()
-            )
-        })?;
+        if profile_path.exists() {
+            fs::remove_dir_all(&profile_path).map_err(|error| {
+                format!(
+                    "删除 profile 目录失败：{}，路径：{}",
+                    error,
+                    profile_path.display()
+                )
+            })?;
+        }
+    } else if !is_protected_external_profile_directory(&environment_profile_directory(&environment)) {
+        ensure_deletable_external_profile_path(&profile_path, &environment_profile_directory(&environment))?;
+
+        if profile_path.exists() {
+            fs::remove_dir_all(&profile_path).map_err(|error| {
+                format!(
+                    "删除外部 Profile 目录失败：{}，路径：{}",
+                    error,
+                    profile_path.display()
+                )
+            })?;
+        }
     }
 
     config.environments.retain(|environment| environment.id != id);
@@ -963,6 +1200,13 @@ fn copy_master(app: tauri::AppHandle, id: String) -> Result<bool, String> {
     let config = read_config(&app)?;
     let index = find_environment_index(&config, &id)?;
     let environment = &config.environments[index];
+
+    if !environment.managed
+        && is_protected_external_profile_directory(&environment_profile_directory(environment))
+    {
+        return Err("Default、Guest Profile、System Profile 不支持同步母版，避免覆盖内置 Profile 数据".to_string());
+    }
+
     let master_profile_path = resolve_master_profile_source(Path::new(&config.master_profile_path))?;
     let default_profile_path = environment_default_profile_dir(environment);
 
@@ -980,18 +1224,19 @@ fn launch_environment(app: tauri::AppHandle, id: String) -> Result<bool, String>
     let index = find_environment_index(&config, &id)?;
     let environment = &config.environments[index];
     let chrome_path = Path::new(&config.chrome_path);
-    let profile_path = Path::new(&environment.profile_path);
+    let user_data_dir = environment_user_data_dir(environment);
+    let profile_directory = environment_profile_directory(environment);
 
     if !chrome_path.is_file() {
         return Err("Chrome 程序路径无效，请在全局设置中选择 chrome.exe".to_string());
     }
 
-    fs::create_dir_all(profile_path)
-        .map_err(|error| format!("创建 profile 目录失败：{}，路径：{}", error, profile_path.display()))?;
+    fs::create_dir_all(&user_data_dir)
+        .map_err(|error| format!("创建 profile 目录失败：{}，路径：{}", error, user_data_dir.display()))?;
 
     let mut args = vec![
-        format!("--user-data-dir={}", profile_path.display()),
-        "--profile-directory=Default".to_string(),
+        format!("--user-data-dir={}", user_data_dir.display()),
+        format!("--profile-directory={profile_directory}"),
         "--no-first-run".to_string(),
         "--disable-default-apps".to_string(),
     ];
@@ -1042,6 +1287,7 @@ fn main() {
             load_config,
             update_config,
             create_environment,
+            scan_existing_profiles,
             update_environment,
             delete_environment,
             copy_master,
