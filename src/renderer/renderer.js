@@ -4,7 +4,7 @@ const api = {
   loadConfig: () => invoke('load_config'),
   updateConfig: (patch) => invoke('update_config', { patch }),
   selectChromeFile: () => invoke('select_chrome_file'),
-  selectDirectory: (title) => invoke('select_directory', { title }),
+  selectDirectory: (title, initialPath = '') => invoke('select_directory', { title, initialPath }),
   createEnvironment: (payload) => invoke('create_environment', { payload }),
   updateEnvironment: (id, patch) => invoke('update_environment', { id, patch }),
   deleteEnvironment: (id) => invoke('delete_environment', { id }),
@@ -16,6 +16,7 @@ const api = {
 const state = {
   config: null,
   saveTimers: new Map(),
+  settingsSaveTimer: null,
   editing: new Set(),
   savingFields: new Set(),
 };
@@ -34,10 +35,16 @@ const nodes = {
   masterProfilePath: document.getElementById('masterProfilePath'),
   profileStoragePath: document.getElementById('profileStoragePath'),
   defaultUrl: document.getElementById('defaultUrl'),
+  syncCookies: document.getElementById('syncCookies'),
+  syncSiteStorage: document.getElementById('syncSiteStorage'),
+  syncExtensions: document.getElementById('syncExtensions'),
+  syncCache: document.getElementById('syncCache'),
+  syncSessions: document.getElementById('syncSessions'),
+  syncHistory: document.getElementById('syncHistory'),
   selectChromeBtn: document.getElementById('selectChromeBtn'),
   selectMasterBtn: document.getElementById('selectMasterBtn'),
   selectStorageBtn: document.getElementById('selectStorageBtn'),
-  saveSettingsBtn: document.getElementById('saveSettingsBtn'),
+  openRepositoryBtn: document.getElementById('openRepositoryBtn'),
   themeToggleBtn: document.getElementById('themeToggleBtn'),
   themeIcon: document.getElementById('themeIcon'),
   toast: document.getElementById('toast'),
@@ -147,10 +154,88 @@ async function loadAndRender() {
  * @returns {void} 无返回值
  */
 function renderSettings() {
+  const syncOptions = getSyncOptions();
+
   nodes.chromePath.value = state.config.chromePath || '';
   nodes.masterProfilePath.value = state.config.masterProfilePath || '';
   nodes.profileStoragePath.value = state.config.profileStoragePath || '';
   nodes.defaultUrl.value = state.config.defaultUrl || '';
+  nodes.syncCookies.checked = syncOptions.syncCookies;
+  nodes.syncSiteStorage.checked = syncOptions.syncSiteStorage;
+  nodes.syncExtensions.checked = syncOptions.syncExtensions;
+  nodes.syncCache.checked = syncOptions.syncCache;
+  nodes.syncSessions.checked = syncOptions.syncSessions;
+  nodes.syncHistory.checked = syncOptions.syncHistory;
+}
+
+/**
+ * 获取当前配置中的同步选项
+ * @returns {object} 带默认值的同步选项
+ */
+function getSyncOptions() {
+  return {
+    syncCookies: state.config?.syncOptions?.syncCookies ?? true,
+    syncSiteStorage: state.config?.syncOptions?.syncSiteStorage ?? true,
+    syncExtensions: state.config?.syncOptions?.syncExtensions ?? true,
+    syncCache: state.config?.syncOptions?.syncCache ?? true,
+    syncSessions: state.config?.syncOptions?.syncSessions ?? true,
+    syncHistory: state.config?.syncOptions?.syncHistory ?? true,
+  };
+}
+
+/**
+ * 从设置表单读取同步选项
+ * @returns {object} 可保存的同步选项
+ */
+function getSyncOptionsFromForm() {
+  return {
+    syncCookies: nodes.syncCookies.checked,
+    syncSiteStorage: nodes.syncSiteStorage.checked,
+    syncExtensions: nodes.syncExtensions.checked,
+    syncCache: nodes.syncCache.checked,
+    syncSessions: nodes.syncSessions.checked,
+    syncHistory: nodes.syncHistory.checked,
+  };
+}
+
+/**
+ * 从设置表单读取全局配置
+ * @returns {object} 可保存的全局配置字段
+ */
+function getSettingsPatchFromForm() {
+  return {
+    chromePath: nodes.chromePath.value.trim(),
+    masterProfilePath: nodes.masterProfilePath.value.trim(),
+    profileStoragePath: nodes.profileStoragePath.value.trim(),
+    defaultUrl: nodes.defaultUrl.value.trim(),
+    syncOptions: getSyncOptionsFromForm(),
+  };
+}
+
+/**
+ * 保存全局设置并同步本地状态
+ * @param {boolean} showSuccess 是否显示保存成功提示
+ * @returns {Promise<void>} 无返回值
+ */
+async function saveSettings(showSuccess = true) {
+  state.config = await api.updateConfig(getSettingsPatchFromForm());
+
+  if (showSuccess) {
+    showToast('设置已自动保存');
+  }
+}
+
+/**
+ * 防抖自动保存全局设置
+ * @returns {void} 无返回值
+ */
+function scheduleSettingsSave() {
+  window.clearTimeout(state.settingsSaveTimer);
+  state.settingsSaveTimer = window.setTimeout(() => {
+    runTask(async () => {
+      await saveSettings();
+    });
+  }, 650);
 }
 
 /**
@@ -328,47 +413,73 @@ nodes.selectChromeBtn.addEventListener('click', () => {
 
     if (selected) {
       nodes.chromePath.value = selected;
+      await saveSettings();
     }
   });
 });
 
 nodes.selectMasterBtn.addEventListener('click', () => {
   runTask(async () => {
-    const selected = await api.selectDirectory('选择母版 Profile 目录');
+    const selected = await api.selectDirectory('选择母版 Profile 路径', nodes.masterProfilePath.value);
 
     if (selected) {
       nodes.masterProfilePath.value = selected;
+      await saveSettings();
     }
   });
 });
 
 nodes.selectStorageBtn.addEventListener('click', () => {
   runTask(async () => {
-    const selected = await api.selectDirectory('选择 Profile 保存路径');
+    const selected = await api.selectDirectory('选择 Profile 保存路径', nodes.profileStoragePath.value);
 
     if (selected) {
       nodes.profileStoragePath.value = selected;
+      await saveSettings();
     }
   });
 });
 
-nodes.saveSettingsBtn.addEventListener('click', () => {
-  runTask(async () => {
-    await api.updateConfig({
-      chromePath: nodes.chromePath.value.trim(),
-      masterProfilePath: nodes.masterProfilePath.value.trim(),
-      profileStoragePath: nodes.profileStoragePath.value.trim(),
-      defaultUrl: nodes.defaultUrl.value.trim(),
-    });
+[
+  nodes.chromePath,
+  nodes.masterProfilePath,
+  nodes.profileStoragePath,
+  nodes.defaultUrl,
+].forEach((input) => {
+  input.addEventListener('input', scheduleSettingsSave);
+  input.addEventListener('blur', () => {
+    window.clearTimeout(state.settingsSaveTimer);
 
-    await loadAndRender();
-    showToast('设置已保存');
+    runTask(async () => {
+      await saveSettings(false);
+    });
+  });
+});
+
+[
+  nodes.syncCookies,
+  nodes.syncSiteStorage,
+  nodes.syncExtensions,
+  nodes.syncCache,
+  nodes.syncSessions,
+  nodes.syncHistory,
+].forEach((checkbox) => {
+  checkbox.addEventListener('change', () => {
+    runTask(async () => {
+      await saveSettings();
+    });
   });
 });
 
 nodes.themeToggleBtn.addEventListener('click', () => {
   const nextTheme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
   applyTheme(nextTheme);
+});
+
+nodes.openRepositoryBtn.addEventListener('click', () => {
+  runTask(async () => {
+    await api.openPath('https://github.com/gorkys/chromeProfileManage');
+  });
 });
 
 nodes.environmentList.addEventListener('click', (event) => {

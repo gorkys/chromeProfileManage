@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use tauri::Manager;
 
@@ -24,6 +24,95 @@ struct Environment {
     updated_at: String,
 }
 
+/// 控制同步母版时需要带入的浏览数据
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SyncOptions {
+    /// 是否同步 Cookie 与登录态数据库
+    sync_cookies: bool,
+    /// 是否同步网站本地存储数据
+    sync_site_storage: bool,
+    /// 是否同步插件本体与插件配置
+    sync_extensions: bool,
+    /// 是否同步缓存数据
+    sync_cache: bool,
+    /// 是否同步浏览器会话恢复数据
+    sync_sessions: bool,
+    /// 是否同步浏览历史和下载记录
+    sync_history: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncOptionsInput {
+    sync_cookies: Option<bool>,
+    sync_site_storage: Option<bool>,
+    sync_extensions: Option<bool>,
+    sync_cache: Option<bool>,
+    sync_sessions: Option<bool>,
+    sync_history: Option<bool>,
+    exclude_cookies: Option<bool>,
+    exclude_site_storage: Option<bool>,
+    exclude_extensions: Option<bool>,
+    exclude_cache: Option<bool>,
+    exclude_sessions: Option<bool>,
+    exclude_history: Option<bool>,
+}
+
+impl<'de> Deserialize<'de> for SyncOptions {
+    /// 反序列化同步选项并兼容旧的排除字段
+    /// deserializer：Serde 反序列化器
+    /// 返回值：标准同步选项
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let input = SyncOptionsInput::deserialize(deserializer)?;
+
+        Ok(Self {
+            sync_cookies: input
+                .sync_cookies
+                .or_else(|| input.exclude_cookies.map(|value| !value))
+                .unwrap_or(true),
+            sync_site_storage: input
+                .sync_site_storage
+                .or_else(|| input.exclude_site_storage.map(|value| !value))
+                .unwrap_or(true),
+            sync_extensions: input
+                .sync_extensions
+                .or_else(|| input.exclude_extensions.map(|value| !value))
+                .unwrap_or(true),
+            sync_cache: input
+                .sync_cache
+                .or_else(|| input.exclude_cache.map(|value| !value))
+                .unwrap_or(true),
+            sync_sessions: input
+                .sync_sessions
+                .or_else(|| input.exclude_sessions.map(|value| !value))
+                .unwrap_or(true),
+            sync_history: input
+                .sync_history
+                .or_else(|| input.exclude_history.map(|value| !value))
+                .unwrap_or(true),
+        })
+    }
+}
+
+impl Default for SyncOptions {
+    /// 生成默认同步选项
+    /// 返回值：默认全部同步的同步选项
+    fn default() -> Self {
+        Self {
+            sync_cookies: true,
+            sync_site_storage: true,
+            sync_extensions: true,
+            sync_cache: true,
+            sync_sessions: true,
+            sync_history: true,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct Config {
@@ -32,6 +121,8 @@ struct Config {
     default_url: String,
     #[serde(default)]
     profile_storage_path: String,
+    #[serde(default)]
+    sync_options: SyncOptions,
     environments: Vec<Environment>,
 }
 
@@ -42,6 +133,7 @@ struct ConfigPatch {
     master_profile_path: Option<String>,
     default_url: Option<String>,
     profile_storage_path: Option<String>,
+    sync_options: Option<SyncOptions>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -201,6 +293,7 @@ fn default_config(app: &tauri::AppHandle) -> Result<Config, String> {
         master_profile_path: find_default_profile_path(),
         default_url: String::new(),
         profile_storage_path: default_profile_storage_path(app)?,
+        sync_options: SyncOptions::default(),
         environments: Vec::new(),
     })
 }
@@ -283,6 +376,214 @@ fn is_profile_runtime_file(name: &str) -> bool {
         name,
         "SingletonCookie" | "SingletonLock" | "SingletonSocket" | "Lockfile"
     )
+}
+
+/// 提取相对路径中的普通路径片段
+/// relative_path：相对 profile 根目录的路径
+/// 返回值：全部转为小写的路径片段
+fn relative_path_parts(relative_path: &Path) -> Vec<String> {
+    relative_path
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(value) => Some(value.to_string_lossy().to_ascii_lowercase()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// 判断 profile 相对路径是否等于指定片段序列
+/// parts：已经标准化的相对路径片段
+/// pattern：要匹配的路径片段
+/// 返回值：完全匹配时返回 true
+fn profile_path_matches(parts: &[String], pattern: &[&str]) -> bool {
+    parts.len() == pattern.len()
+        && parts
+            .iter()
+            .zip(pattern.iter())
+            .all(|(part, expected)| part.as_str() == *expected)
+}
+
+/// 判断 profile 相对路径是否以指定片段序列开头
+/// parts：已经标准化的相对路径片段
+/// pattern：要匹配的路径前缀片段
+/// 返回值：前缀匹配时返回 true
+fn profile_path_starts_with(parts: &[String], pattern: &[&str]) -> bool {
+    parts.len() >= pattern.len()
+        && parts
+            .iter()
+            .take(pattern.len())
+            .zip(pattern.iter())
+            .all(|(part, expected)| part.as_str() == *expected)
+}
+
+/// 判断当前 IndexedDB 条目是否属于网站来源
+/// parts：已经标准化的相对路径片段
+/// 返回值：属于网站来源时返回 true
+fn is_site_indexeddb_entry(parts: &[String]) -> bool {
+    if !profile_path_starts_with(parts, &["indexeddb"]) || parts.len() < 2 {
+        return false;
+    }
+
+    let origin_name = &parts[1];
+
+    !origin_name.starts_with("chrome-extension_")
+}
+
+/// 判断当前 IndexedDB 条目是否属于 Chrome 插件来源
+/// parts：已经标准化的相对路径片段
+/// 返回值：属于插件来源时返回 true
+fn is_extension_indexeddb_entry(parts: &[String]) -> bool {
+    if !profile_path_starts_with(parts, &["indexeddb"]) || parts.len() < 2 {
+        return false;
+    }
+
+    parts[1].starts_with("chrome-extension_")
+}
+
+/// 判断同步母版时是否需要跳过指定 profile 条目
+/// file_name：当前条目的文件名
+/// relative_path：当前条目相对 profile 根目录的路径
+/// sync_options：同步过滤选项
+/// 返回值：需要跳过时返回 true
+fn should_skip_profile_entry(
+    file_name: &str,
+    relative_path: &Path,
+    sync_options: &SyncOptions,
+) -> bool {
+    if is_profile_runtime_file(file_name) {
+        return true;
+    }
+
+    let parts = relative_path_parts(relative_path);
+
+    // Cookie 数据通常保存网站登录态，未勾选同步时不复制到环境
+    if !sync_options.sync_cookies {
+        let cookie_paths: &[&[&str]] = &[
+            &["cookies"],
+            &["cookies-journal"],
+            &["network", "cookies"],
+            &["network", "cookies-journal"],
+            &["safe browsing cookies"],
+            &["safe browsing cookies-journal"],
+        ];
+
+        if cookie_paths
+            .iter()
+            .any(|pattern| profile_path_matches(&parts, pattern))
+        {
+            return true;
+        }
+    }
+
+    // 插件本体和插件配置分散在多个扩展目录，未勾选同步时统一跳过
+    if !sync_options.sync_extensions {
+        let extension_paths: &[&[&str]] = &[
+            &["extensions"],
+            &["extension rules"],
+            &["extension scripts"],
+            &["extension state"],
+            &["local extension settings"],
+            &["managed extension settings"],
+            &["sync extension settings"],
+            &["extension cookies"],
+            &["extension cookies-journal"],
+        ];
+
+        if is_extension_indexeddb_entry(&parts)
+            || extension_paths
+            .iter()
+            .any(|pattern| profile_path_starts_with(&parts, pattern))
+        {
+            return true;
+        }
+    }
+
+    // 站点存储包含网页写入的本地数据，IndexedDB 会保留 chrome-extension 来源
+    if !sync_options.sync_site_storage {
+        let site_storage_paths: &[&[&str]] = &[
+            &["local storage"],
+            &["session storage"],
+            &["service worker"],
+            &["file system"],
+            &["databases"],
+            &["blob_storage"],
+            &["shared storage"],
+            &["shared_proto_db"],
+            &["storage", "default"],
+            &["storage", "buckets"],
+        ];
+
+        if is_site_indexeddb_entry(&parts)
+            || site_storage_paths
+                .iter()
+                .any(|pattern| profile_path_starts_with(&parts, pattern))
+        {
+            return true;
+        }
+    }
+
+    // 缓存数据可由 Chrome 自动重建，未勾选同步时跳过
+    if !sync_options.sync_cache {
+        let cache_paths: &[&[&str]] = &[
+            &["cache"],
+            &["code cache"],
+            &["gpucache"],
+            &["dawncache"],
+            &["shadercache"],
+            &["grshadercache"],
+            &["media cache"],
+            &["optimizationhints"],
+        ];
+
+        if cache_paths
+            .iter()
+            .any(|pattern| profile_path_starts_with(&parts, pattern))
+        {
+            return true;
+        }
+    }
+
+    // 会话文件会恢复上次窗口和标签页，未勾选同步时跳过
+    if !sync_options.sync_sessions {
+        let session_paths: &[&[&str]] = &[
+            &["sessions"],
+            &["current session"],
+            &["current tabs"],
+            &["last session"],
+            &["last tabs"],
+        ];
+
+        if session_paths
+            .iter()
+            .any(|pattern| profile_path_starts_with(&parts, pattern))
+        {
+            return true;
+        }
+    }
+
+    // 历史记录和常用站点属于使用痕迹，未勾选同步时跳过
+    if !sync_options.sync_history {
+        let history_paths: &[&[&str]] = &[
+            &["history"],
+            &["history-journal"],
+            &["visited links"],
+            &["top sites"],
+            &["top sites-journal"],
+            &["shortcuts"],
+            &["shortcuts-journal"],
+            &["favicons"],
+            &["favicons-journal"],
+        ];
+
+        if history_paths
+            .iter()
+            .any(|pattern| profile_path_matches(&parts, pattern))
+        {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// 判断目录是否像一个 Chrome profile 目录
@@ -370,11 +671,18 @@ fn ensure_managed_profile_path(app: &tauri::AppHandle, target_path: &Path) -> Re
     Err("出于安全限制，只允许删除本工具创建的 profile 目录".to_string())
 }
 
-/// 递归复制目录，跳过 Chrome 运行时锁文件
+/// 递归复制目录，按同步选项跳过敏感浏览数据
 /// source：源目录路径
 /// destination：目标目录路径
+/// relative_root：当前目录相对 profile 根目录的路径
+/// sync_options：同步过滤选项
 /// 返回值：成功时无返回值
-fn copy_dir_all(source: &Path, destination: &Path) -> Result<(), String> {
+fn copy_dir_filtered(
+    source: &Path,
+    destination: &Path,
+    relative_root: &Path,
+    sync_options: &SyncOptions,
+) -> Result<(), String> {
     fs::create_dir_all(destination)
         .map_err(|error| format!("创建目标目录失败：{}，路径：{}", error, destination.display()))?;
 
@@ -385,20 +693,20 @@ fn copy_dir_all(source: &Path, destination: &Path) -> Result<(), String> {
             .map_err(|error| format!("读取目录项失败：{}，路径：{}", error, source.display()))?;
         let file_name = entry.file_name();
         let file_name_text = file_name.to_string_lossy();
-
-        // Chrome 正在使用 profile 时会生成这些锁文件，复制它们没有意义且容易失败
-        if is_profile_runtime_file(&file_name_text) {
-            continue;
-        }
-
         let source_path = entry.path();
         let destination_path = destination.join(&file_name);
+        let relative_path = relative_root.join(&file_name);
         let file_type = entry
             .file_type()
             .map_err(|error| format!("读取文件类型失败：{}，路径：{}", error, source_path.display()))?;
 
+        // 运行时锁文件、Cookie、站点数据等条目会在这里统一过滤
+        if should_skip_profile_entry(&file_name_text, &relative_path, sync_options) {
+            continue;
+        }
+
         if file_type.is_dir() {
-            copy_dir_all(&source_path, &destination_path)?;
+            copy_dir_filtered(&source_path, &destination_path, &relative_path, sync_options)?;
         } else if file_type.is_file() {
             fs::copy(&source_path, &destination_path).map_err(|error| {
                 format!(
@@ -412,6 +720,15 @@ fn copy_dir_all(source: &Path, destination: &Path) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// 从母版 profile 复制到目标 profile
+/// source：源 profile 目录路径
+/// destination：目标 profile 目录路径
+/// sync_options：同步过滤选项
+/// 返回值：成功时无返回值
+fn copy_dir_all(source: &Path, destination: &Path, sync_options: &SyncOptions) -> Result<(), String> {
+    copy_dir_filtered(source, destination, Path::new(""), sync_options)
 }
 
 /// 根据 id 查找环境下标
@@ -438,13 +755,40 @@ fn select_chrome_file() -> String {
         .unwrap_or_default()
 }
 
+/// 解析目录选择器的默认打开目录
+/// initial_path：用户当前输入的目录路径
+/// 返回值：存在的默认打开目录，不存在时返回 None
+fn resolve_initial_directory(initial_path: Option<String>) -> Option<PathBuf> {
+    let value = initial_path?.trim().to_string();
+
+    if value.is_empty() {
+        return None;
+    }
+
+    let path = PathBuf::from(value);
+
+    if path.is_dir() {
+        return Some(path);
+    }
+
+    path.parent()
+        .filter(|parent| parent.is_dir())
+        .map(|parent| parent.to_path_buf())
+}
+
 /// 打开系统目录选择器
 /// title：选择器标题
+/// initial_path：默认打开的目录路径
 /// 返回值：选中的目录路径，取消时返回空字符串
 #[tauri::command]
-fn select_directory(title: Option<String>) -> String {
-    rfd::FileDialog::new()
-        .set_title(&title.unwrap_or_else(|| "选择目录".to_string()))
+fn select_directory(title: Option<String>, initial_path: Option<String>) -> String {
+    let mut dialog = rfd::FileDialog::new().set_title(&title.unwrap_or_else(|| "选择目录".to_string()));
+
+    if let Some(path) = resolve_initial_directory(initial_path) {
+        dialog = dialog.set_directory(path);
+    }
+
+    dialog
         .pick_folder()
         .map(|path| path.to_string_lossy().to_string())
         .unwrap_or_default()
@@ -480,6 +824,10 @@ fn update_config(app: tauri::AppHandle, patch: ConfigPatch) -> Result<Config, St
 
     if let Some(profile_storage_path) = patch.profile_storage_path {
         config.profile_storage_path = profile_storage_path.trim().to_string();
+    }
+
+    if let Some(sync_options) = patch.sync_options {
+        config.sync_options = sync_options;
     }
 
     write_config(&app, &config)?;
@@ -534,7 +882,7 @@ fn create_environment(
         let master_profile_path = resolve_master_profile_source(Path::new(&config.master_profile_path))?;
         let default_profile_path = environment_default_profile_dir(&environment);
 
-        copy_dir_all(&master_profile_path, &default_profile_path)?;
+        copy_dir_all(&master_profile_path, &default_profile_path, &config.sync_options)?;
     }
 
     config.environments.insert(0, environment.clone());
@@ -618,7 +966,7 @@ fn copy_master(app: tauri::AppHandle, id: String) -> Result<bool, String> {
     let master_profile_path = resolve_master_profile_source(Path::new(&config.master_profile_path))?;
     let default_profile_path = environment_default_profile_dir(environment);
 
-    copy_dir_all(&master_profile_path, &default_profile_path)?;
+    copy_dir_all(&master_profile_path, &default_profile_path, &config.sync_options)?;
     Ok(true)
 }
 

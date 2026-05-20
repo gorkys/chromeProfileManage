@@ -30,6 +30,10 @@
             </button>
           </nav>
         </div>
+
+        <button class="footer-icon-btn about-nav-btn" data-view="about" type="button" title="关于">
+          <span class="nav-icon">ⓘ</span>
+        </button>
       </aside>
 
       <main class="content">
@@ -86,7 +90,7 @@
           <header class="page-header">
             <div>
               <h2>全局设置</h2>
-              <p>配置 Chrome 程序、母版 Profile、Profile 保存路径和默认启动网页。</p>
+              <p>配置 Chrome 程序、母版 Profile 路径、Profile 保存路径和默认启动网页。</p>
             </div>
           </header>
 
@@ -101,8 +105,8 @@
 
             <div class="setting-row">
               <label>
-                <span>母版 Profile 目录</span>
-                <input id="masterProfilePath" type="text" placeholder="选择一个已有 Chrome Profile 目录作为母版" />
+                <span>母版 Profile 路径</span>
+                <input id="masterProfilePath" type="text" placeholder="选择一个已有 Chrome Profile 路径作为母版" />
               </label>
               <button class="secondary-btn" id="selectMasterBtn" type="button">选择</button>
             </div>
@@ -120,8 +124,88 @@
               <input id="defaultUrl" type="url" placeholder="新环境默认打开的网址，可留空" />
             </label>
 
-            <div class="actions">
-              <button class="primary-btn" id="saveSettingsBtn" type="button">保存设置</button>
+            <section class="setting-group">
+              <div class="setting-group-title">
+                <h3>同步选项</h3>
+                <p>控制同步母版 Profile 时需要带入的数据，默认全部同步。</p>
+              </div>
+              <div class="sync-option-grid">
+                <label class="sync-option" title="同步 Cookie 数据库，会带入网站登录态和会话标识">
+                  <input id="syncCookies" type="checkbox" checked />
+                  <span>
+                    <strong>同步 Cookie</strong>
+                    <small>带入网站登录状态、会话标识和部分账号信息；取消勾选可避免复制登录态。</small>
+                  </span>
+                </label>
+                <label class="sync-option" title="同步网站写入的本地存储目录">
+                  <input id="syncSiteStorage" type="checkbox" checked />
+                  <span>
+                    <strong>同步站点存储</strong>
+                    <small>带入 LocalStorage、SessionStorage、Service Worker、站点 IndexedDB 等数据。</small>
+                  </span>
+                </label>
+                <label class="sync-option" title="同步插件本体和插件配置数据">
+                  <input id="syncExtensions" type="checkbox" checked />
+                  <span>
+                    <strong>同步插件</strong>
+                    <small>带入 Extensions、Local Extension Settings、Extension State、插件 IndexedDB 等数据。</small>
+                  </span>
+                </label>
+                <label class="sync-option" title="同步缓存文件，保留母版中的临时缓存内容">
+                  <input id="syncCache" type="checkbox" checked />
+                  <span>
+                    <strong>同步缓存</strong>
+                    <small>带入 Cache、Code Cache、GPUCache 等可重新生成的数据；取消勾选可减少复制体积。</small>
+                  </span>
+                </label>
+                <label class="sync-option" title="同步 Chrome 会话恢复数据">
+                  <input id="syncSessions" type="checkbox" checked />
+                  <span>
+                    <strong>同步会话</strong>
+                    <small>带入上次打开的窗口、标签页和恢复会话记录。</small>
+                  </span>
+                </label>
+                <label class="sync-option" title="同步浏览历史、下载记录和常用站点记录">
+                  <input id="syncHistory" type="checkbox" checked />
+                  <span>
+                    <strong>同步历史记录</strong>
+                    <small>带入 History、Visited Links、Top Sites、Shortcuts、Favicons 等记录。</small>
+                  </span>
+                </label>
+              </div>
+            </section>
+          </section>
+        </section>
+
+        <section class="view" id="view-about">
+          <header class="page-header">
+            <div>
+              <h2>关于</h2>
+              <p>Chrome Profile Manage 是一个用于管理独立 Chrome Profile 环境的轻量桌面工具。</p>
+            </div>
+          </header>
+
+          <section class="panel about-panel">
+            <img class="about-logo" src="./assets/logo.png" alt="Chrome Profile Manage" />
+            <div class="about-content">
+              <h3>Chrome Profile Manage</h3>
+              <p>基于 Tauri 构建，专注于快速创建、启动和同步隔离的 Chrome 工作环境。</p>
+              <dl>
+                <div>
+                  <dt>当前版本</dt>
+                  <dd>v0.1.2</dd>
+                </div>
+                <div>
+                  <dt>开源地址</dt>
+                  <dd>
+                    <button class="link-button" id="openRepositoryBtn" type="button">https://github.com/gorkys/chromeProfileManage</button>
+                  </dd>
+                </div>
+                <div>
+                  <dt>运行方式</dt>
+                  <dd>每个环境使用独立 user-data-dir，互不共享浏览器数据。</dd>
+                </div>
+              </dl>
             </div>
           </section>
         </section>

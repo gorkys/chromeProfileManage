@@ -1,6 +1,6 @@
 [package]
 name = "chrome-manage"
-version = "0.1.1"
+version = "0.1.2"
 description = "本地化 Chrome 浏览器环境工作台"
 authors = ["chrome-manage"]
 license = ""
